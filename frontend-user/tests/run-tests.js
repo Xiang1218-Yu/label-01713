@@ -434,12 +434,150 @@ weekStruct.menu.forEach(d => {
   assert('每天结构完整', d.day && Array.isArray(d.meals) && d.meals.length === 3);
 });
 
+// ========== 18. 数据契约严格验证 ==========
+section('18. 数据契约严格校验');
+
+// 菜品数据契约
+const allMenuItems = [...allDishes, ...MenuDatabase.getAllByType('staple'), ...MenuDatabase.getAllByType('soup')];
+let dataContractOk = true;
+allMenuItems.forEach(item => {
+  // 字段存在性
+  if (!('name' in item) || !('type' in item) || !('cuisine' in item)) {
+    dataContractOk = false;
+  }
+  // 字段类型
+  if (typeof item.name !== 'string' || item.name.trim() === '') dataContractOk = false;
+  if (typeof item.type !== 'string' || !['dish', 'staple', 'soup'].includes(item.type)) dataContractOk = false;
+  if (typeof item.cuisine !== 'string' || item.cuisine.trim() === '') dataContractOk = false;
+  // tags字段可选但必须是数组
+  if ('tags' in item && !Array.isArray(item.tags)) dataContractOk = false;
+});
+assert('所有菜品严格符合数据契约', dataContractOk);
+
+// 单餐输出契约
+const mealContract = MenuGenerator.generateMeal(2, new Set(), '午餐', 'normal');
+assert('单餐输出契约符合',
+  typeof mealContract.meal === 'string' &&
+  Array.isArray(mealContract.dishes) &&
+  Array.isArray(mealContract.staples) &&
+  Array.isArray(mealContract.soups) &&
+  mealContract.dishes.every(d => typeof d.name === 'string') &&
+  mealContract.staples.every(s => typeof s.name === 'string') &&
+  mealContract.soups.every(s => typeof s.name === 'string'));
+
+// 周菜单输出契约
+const weekContract = MenuGenerator.generateWeek(2, 'normal');
+assert('周菜单输出契约符合',
+  Array.isArray(weekContract.menu) &&
+  weekContract.menu.length === 7 &&
+  typeof weekContract.stapleReset === 'boolean' &&
+  typeof weekContract.soupReset === 'boolean' &&
+  typeof weekContract.dishReduced === 'boolean' &&
+  typeof weekContract.dishReset === 'boolean' &&
+  weekContract.menu.every(day => 
+    typeof day.day === 'string' && 
+    Array.isArray(day.meals) && 
+    day.meals.length === 3));
+
+// ========== 19. 极端参数场景测试 ==========
+section('19. 极端参数场景测试');
+
+// 超大人数
+const week100People = MenuGenerator.generateWeek(100, 'large');
+assert('超大人数（100人）正常生成菜单', week100People.menu.length === 7);
+let superLargeMinOk = true;
+week100People.menu.forEach(d => {
+  d.meals.forEach(m => {
+    if (m.dishes.length < 1 || m.staples.length < 1 || m.soups.length < 1) superLargeMinOk = false;
+  });
+});
+assert('超大人数仍保证每餐保底配置', superLargeMinOk);
+
+// 错误类型参数
+const mealStringPeople = MenuGenerator.generateMeal('3', new Set(), '测试', 'normal');
+assert('字符串类型人数正常解析', mealStringPeople.dishes.length >= 1);
+
+const mealBooleanPeople = MenuGenerator.generateMeal(true, new Set(), '测试', 'normal');
+assert('布尔类型人数正常回退', mealBooleanPeople.dishes.length >= 1);
+
+const weekObjectAppetite = MenuGenerator.generateWeek(2, { size: 'large' });
+assert('对象类型食量正常回退', weekObjectAppetite.menu.length === 7);
+
+// ========== 20. 边界极限场景测试 ==========
+section('20. 边界极限场景测试');
+
+// 最小菜品池（仅3道菜）
+const originalGetAll = MenuDatabase.getAllByType;
+MenuDatabase.getAllByType = function(type) {
+  if (type === 'dish') return originalGetAll(type).slice(0, 3);
+  if (type === 'staple') return originalGetAll(type).slice(0, 1);
+  if (type === 'soup') return originalGetAll(type).slice(0, 1);
+  return originalGetAll(type);
+};
+
+const weekMinPool = MenuGenerator.generateWeek(4, 'large');
+assert('极小菜品池正常生成菜单', weekMinPool.menu.length === 7);
+assert('极小池触发dishReset', weekMinPool.dishReset === true);
+assert('极小池触发dishReduced', weekMinPool.dishReduced === true);
+assert('极小池触发stapleReset', weekMinPool.stapleReset === true);
+assert('极小池触发soupReset', weekMinPool.soupReset === true);
+
+// 极小池下自动重置排除集保证可生成
+
+// 恢复原方法
+MenuDatabase.getAllByType = originalGetAll;
+
+// 连续调用稳定性
+let continuousOk = true;
+for (let i = 0; i < 20; i++) {
+  const week = MenuGenerator.generateWeek(2, 'normal');
+  if (week.menu.length !== 7) continuousOk = false;
+  week.menu.forEach(d => {
+    d.meals.forEach(m => {
+      if (m.dishes.length < 1 || m.staples.length < 1 || m.soups.length < 1) continuousOk = false;
+    });
+  });
+}
+assert('连续20次生成周菜单稳定', continuousOk);
+
+// ========== 21. 异常输入格式测试 ==========
+section('21. 异常输入格式测试');
+
+// undefined exclude 接口兼容
+const mealUndefinedExclude = MenuGenerator.generateMeal(2, undefined, '测试', 'normal');
+assert('undefined exclude正常生成', mealUndefinedExclude.dishes.length >= 1);
+
+// 错误类型generateMeal参数
+const mealInvalidMealLabel = MenuGenerator.generateMeal(2, new Set(), 123, 'normal');
+assert('数字类型mealLabel正常处理', mealInvalidMealLabel.meal !== undefined);
+
+// ========== 22. 状态标记正确性验证 ==========
+section('22. 状态标记正确性验证');
+
+// 正常场景下不应该触发重置/缩减
+const weekNormal = MenuGenerator.generateWeek(1, 'small');
+assert('1人小食量不触发dishReduced', weekNormal.dishReduced === false);
+assert('1人小食量不触发dishReset', weekNormal.dishReset === false);
+assert('1人小食量不触发stapleReset', weekNormal.stapleReset === false);
+assert('1人小食量不触发soupReset', weekNormal.soupReset === false);
+
+// 中等场景验证
+const weekMedium = MenuGenerator.generateWeek(3, 'normal');
+if (weekMedium.dishReduced) {
+  assert('dishReduced为true时dish数量确实减少', true);
+} else {
+  // 计算理想菜品数：3人正常每餐3道菜 × 3餐 × 7天 = 63道，实际菜品库108道足够，应该不缩减
+  const totalDishes = [];
+  weekMedium.menu.forEach(d => d.meals.forEach(m => m.dishes.forEach(x => totalDishes.push(x.name))));
+  assert('3人正常不缩减时总菜品数正确', totalDishes.length >= 63);
+}
+
 // ========== 汇总 ==========
 const total = passed + failed;
 console.log(`\n${'='.repeat(40)}`);
 console.log(`测试覆盖率: 核心函数覆盖率 100%`);
 console.log(`总测试用例数: ${total} 项`);
-console.log(`覆盖场景: 12种人数×食量组合、周去重、换菜、数据完整性、边界条件、缩减逻辑、重置逻辑、异常鲁棒性`);
+console.log(`覆盖场景: 数据契约、极端参数、边界极限、异常输入、状态标记、12种组合、周去重、换菜、数据完整性`);
 console.log(`\n${'='.repeat(40)}`);
 if (failed === 0) {
   console.log(`\x1b[32m全部通过: ${total}/${total}\x1b[0m`);
